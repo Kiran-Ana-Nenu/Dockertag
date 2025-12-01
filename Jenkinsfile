@@ -23,15 +23,14 @@ pipeline {
     }
 
     options {
-        // 1. Clean pipeline - ensures a fresh environment
+        // Clean pipeline - ensures a fresh environment
         skipDefaultCheckout()
         
-        // 2. Fix: Use 'wrap' for AnsiColor (Console UX Improvements)
-        // Requires the AnsiColor Plugin
-        wrap([$class: 'AnsiColorBuildWrapper', colorMapName: 'xterm']) 
-        
-        // 3. Fix: The 'unit' must be in ALL CAPS (HOURS)
+        // FIX: The 'unit' must be in ALL CAPS (HOURS)
         timeout(time: 3, unit: 'HOURS') 
+        
+        // FIX: ansiColor/wrap is removed from the global options block 
+        // as it is too restrictive. It is applied inside the stage steps instead.
     }
 
     // Parameterized Jenkins Interface (Requires Active Choices Plugin)
@@ -85,42 +84,47 @@ pipeline {
         // 1. Checkout Code
         stage('1. Checkout Code') {
             steps {
-                echo '## 🟢 STAGE 1: Checkout Code'
-                // Checkout SCM (ensures scripts/fabfile.py is available)
-                checkout scm
-                // Ensure the log directory exists
-                sh "${env.LOG_DIR_COMMAND}"
+                // Apply AnsiColor wrapper here (Console UX Improvements)
+                wrap([$class: 'AnsiColorBuildWrapper', colorMapName: 'xterm']) {
+                    echo '## 🟢 STAGE 1: Checkout Code'
+                    // Checkout SCM (ensures scripts/fabfile.py is available)
+                    checkout scm
+                    // Ensure the log directory exists
+                    sh "${env.LOG_DIR_COMMAND}"
+                }
             }
         }
 
         // 2. Validate Parameters
         stage('2. Validate Parameters') {
             steps {
-                script {
-                    echo '## 🟢 STAGE 2: Validate Parameters'
-                    echo '=================================================='
-                    echo "Validating parameters for TICKET: ${params.TICKET_NUMBER}"
-                    echo '=================================================='
+                wrap([$class: 'AnsiColorBuildWrapper', colorMapName: 'xterm']) {
+                    script {
+                        echo '## 🟢 STAGE 2: Validate Parameters'
+                        echo '=================================================='
+                        echo "Validating parameters for TICKET: ${params.TICKET_NUMBER}"
+                        echo '=================================================='
 
-                    // Check for TICKET_NUMBER
-                    if (params.TICKET_NUMBER == null || params.TICKET_NUMBER.trim() == '') {
-                        error 'Parameter Validation Failed: Ticket Number is required.'
-                    }
-
-                    // Prevent empty image selection
-                    if (params.IMAGES_TO_TAG.trim() == '') {
-                        error 'Parameter Validation Failed: Image selection cannot be empty.'
-                    }
-
-                    // Parameter Validation: Conditional requirements
-                    if (params.TAGGING_OPTION.contains('Option B')) {
-                        if (params.CUSTOM_TAG_SOURCE == null || params.CUSTOM_TAG_SOURCE.trim() == '' ||
-                            params.CUSTOM_TAG_DESTINATION == null || params.CUSTOM_TAG_DESTINATION.trim() == '') {
-                            error 'Parameter Validation Failed: CUSTOM_TAG_SOURCE and CUSTOM_TAG_DESTINATION are required for Option B.'
+                        // Check for TICKET_NUMBER
+                        if (params.TICKET_NUMBER == null || params.TICKET_NUMBER.trim() == '') {
+                            error 'Parameter Validation Failed: Ticket Number is required.'
                         }
-                    } else if (params.TAGGING_OPTION.contains('Option A')) {
-                        if (params.TAG_A_TYPE.contains('particular_tag') && (params.CUSTOM_SOURCE_TAG == null || params.CUSTOM_SOURCE_TAG.trim() == '')) {
-                            error 'Parameter Validation Failed: CUSTOM_SOURCE_TAG is required for particular_tag->latest.'
+
+                        // Prevent empty image selection
+                        if (params.IMAGES_TO_TAG.trim() == '') {
+                            error 'Parameter Validation Failed: Image selection cannot be empty.'
+                        }
+
+                        // Parameter Validation: Conditional requirements
+                        if (params.TAGGING_OPTION.contains('Option B')) {
+                            if (params.CUSTOM_TAG_SOURCE == null || params.CUSTOM_TAG_SOURCE.trim() == '' ||
+                                params.CUSTOM_TAG_DESTINATION == null || params.CUSTOM_TAG_DESTINATION.trim() == '') {
+                                error 'Parameter Validation Failed: CUSTOM_TAG_SOURCE and CUSTOM_TAG_DESTINATION are required for Option B.'
+                            }
+                        } else if (params.TAGGING_OPTION.contains('Option A')) {
+                            if (params.TAG_A_TYPE.contains('particular_tag') && (params.CUSTOM_SOURCE_TAG == null || params.CUSTOM_SOURCE_TAG.trim() == '')) {
+                                error 'Parameter Validation Failed: CUSTOM_SOURCE_TAG is required for particular_tag->latest.'
+                            }
                         }
                     }
                 }
@@ -156,50 +160,50 @@ pipeline {
         // 4. Image Tagging (ONLY Fabric execution, Parallel w/ Throttle)
         stage('4. Parallel Image Tagging') {
             steps {
-                script {
-                    echo '## 🟢 STAGE 4: Image Tagging (Fabric Execution)'
-                    
-                    // --- Docker Registry Handling (Login) ---
-                    sh 'echo "Logging in to Docker Registry..."'
-                    if (params.REGISTRY_TYPE == 'docker-hub') {
-                        // Use Docker Hub Credentials
-                        withCredentials([usernamePassword(credentialsId: DOCKER_HUB_CREDENTIAL_ID, passwordVariable: 'DOCKER_PASSWORD', usernameVariable: 'DOCKER_USERNAME')]) {
-                            sh "docker login -u ${DOCKER_USERNAME} -p ${DOCKER_PASSWORD}"
+                wrap([$class: 'AnsiColorBuildWrapper', colorMapName: 'xterm']) {
+                    script {
+                        echo '## 🟢 STAGE 4: Image Tagging (Fabric Execution)'
+                        
+                        // --- Docker Registry Handling (Login) ---
+                        sh 'echo "Logging in to Docker Registry..."'
+                        if (params.REGISTRY_TYPE == 'docker-hub') {
+                            // Use Docker Hub Credentials
+                            withCredentials([usernamePassword(credentialsId: DOCKER_HUB_CREDENTIAL_ID, passwordVariable: 'DOCKER_PASSWORD', usernameVariable: 'DOCKER_USERNAME')]) {
+                                sh "docker login -u ${DOCKER_USERNAME} -p ${DOCKER_PASSWORD}"
+                            }
+                        } else if (params.REGISTRY_TYPE == 'aws-ecr') {
+                            // Use IAM Role (Assumes AWS CLI configured on the slave node)
+                            // NOTE: Replace placeholders (<YOUR_REGION>, <YOUR_ACCOUNT_ID>)
+                            sh 'aws ecr get-login-password --region <YOUR_REGION> | docker login --username AWS --password-stdin <YOUR_ACCOUNT_ID>.dkr.ecr.<YOUR_REGION>.amazonaws.com'
                         }
-                    } else if (params.REGISTRY_TYPE == 'aws-ecr') {
-                        // Use IAM Role (Assumes AWS CLI configured on the slave node)
-                        // NOTE: Replace placeholders (<YOUR_REGION>, <YOUR_ACCOUNT_ID>)
-                        sh 'aws ecr get-login-password --region <YOUR_REGION> | docker login --username AWS --password-stdin <YOUR_ACCOUNT_ID>.dkr.ecr.<YOUR_REGION>.amazonaws.com'
-                    }
 
-                    // --- Construct Fabric Command Arguments ---
-                    def taggingArgs = ""
-                    if (params.TAGGING_OPTION.contains('Option A')) {
-                        if (params.TAG_A_TYPE.contains('latest->stable')) {
-                            taggingArgs = "--tag-type latest_to_stable"
-                        } else { // particular_tag->latest
-                            taggingArgs = "--tag-type custom_to_latest --custom-source-tag ${params.CUSTOM_SOURCE_TAG}"
+                        // --- Construct Fabric Command Arguments ---
+                        def taggingArgs = ""
+                        if (params.TAGGING_OPTION.contains('Option A')) {
+                            if (params.TAG_A_TYPE.contains('latest->stable')) {
+                                taggingArgs = "--tag-type latest_to_stable"
+                            } else { // particular_tag->latest
+                                taggingArgs = "--tag-type custom_to_latest --custom-source-tag ${params.CUSTOM_SOURCE_TAG}"
+                            }
+                        } else { // Option B
+                            taggingArgs = "--tag-type custom_to_custom --source-tag ${params.CUSTOM_TAG_SOURCE} --destination-tag ${params.CUSTOM_TAG_DESTINATION}"
                         }
-                    } else { // Option B
-                        taggingArgs = "--tag-type custom_to_custom --source-tag ${params.CUSTOM_TAG_SOURCE} --destination-tag ${params.CUSTOM_TAG_DESTINATION}"
+
+                        // --- Execute Fabric Command ---
+                        sh """
+                            echo 'Executing Fabric script: ${FABRIC_SCRIPT_PATH}'
+                            python3 ${FABRIC_SCRIPT_PATH} tag_images: \
+                                --images='${params.IMAGES_TO_TAG}' \
+                                --dry-run='${params.DRY_RUN}' \
+                                --parallel-limit=${PARALLEL_LIMIT} \
+                                --log-file='${LOG_FILE}' \
+                                --results-file='${RESULTS_FILE}' \
+                                ${taggingArgs}
+                        """
+
+                        // Log out of Docker
+                        sh 'echo "Logging out of Docker..." && docker logout'
                     }
-
-                    // --- Execute Fabric Command ---
-                    // This executes the core logic in fabfile.py, which handles:
-                    // Parallelism (Throttle 3), Retry Mechanism, Logging, and Dry-run.
-                    sh """
-                        echo 'Executing Fabric script: ${FABRIC_SCRIPT_PATH}'
-                        python3 ${FABRIC_SCRIPT_PATH} tag_images: \
-                            --images='${params.IMAGES_TO_TAG}' \
-                            --dry-run='${params.DRY_RUN}' \
-                            --parallel-limit=${PARALLEL_LIMIT} \
-                            --log-file='${LOG_FILE}' \
-                            --results-file='${RESULTS_FILE}' \
-                            ${taggingArgs}
-                    """
-
-                    // Log out of Docker
-                    sh 'echo "Logging out of Docker..." && docker logout'
                 }
             }
         }
@@ -207,25 +211,27 @@ pipeline {
         // 5. Send Email Notification (Python script)
         stage('5. Send Email Notification') {
             steps {
-                echo '## 🟢 STAGE 5: Send Email Notification'
-                script {
-                    // Combine required recipient (committer email) with optional ones
-                    def recipients = "${env.GIT_COMMITTER_EMAIL},${params.OPTIONAL_RECIPIENTS}".split(',').collect { it.trim() }.findAll { it.length() > 0 }.join(',')
-                    
-                    // Execute the Python script for modern, styled email
-                    sh """
-                        echo 'Running Python email script: ${PYTHON_SCRIPT_PATH}'
-                        python3 ${PYTHON_SCRIPT_PATH} \\
-                            --status 'SUCCESS' \\
-                            --recipients '${recipients}' \\
-                            --log-file '${LOG_FILE}' \\
-                            --results-file '${RESULTS_FILE}' \\
-                            --jenkins-url '${env.BUILD_URL}' \\
-                            --release-link '${env.RELEASE_NOTES_LINK}' \\
-                            --build-info '${BUILD_INFO}' \\
-                            --dry-run-status '${params.DRY_RUN}' \\
-                            --parameters-json '${env.PARAMETERS_JSON}'
-                    """
+                wrap([$class: 'AnsiColorBuildWrapper', colorMapName: 'xterm']) {
+                    script {
+                        echo '## 🟢 STAGE 5: Send Email Notification'
+                        // Combine required recipient (committer email) with optional ones
+                        def recipients = "${env.GIT_COMMITTER_EMAIL},${params.OPTIONAL_RECIPIENTS}".split(',').collect { it.trim() }.findAll { it.length() > 0 }.join(',')
+                        
+                        // Execute the Python script for modern, styled email
+                        sh """
+                            echo 'Running Python email script: ${PYTHON_SCRIPT_PATH}'
+                            python3 ${PYTHON_SCRIPT_PATH} \\
+                                --status 'SUCCESS' \\
+                                --recipients '${recipients}' \\
+                                --log-file '${LOG_FILE}' \\
+                                --results-file '${RESULTS_FILE}' \\
+                                --jenkins-url '${env.BUILD_URL}' \\
+                                --release-link '${env.RELEASE_NOTES_LINK}' \\
+                                --build-info '${BUILD_INFO}' \\
+                                --dry-run-status '${params.DRY_RUN}' \\
+                                --parameters-json '${env.PARAMETERS_JSON}'
+                        """
+                    }
                 }
             }
         }
@@ -233,18 +239,20 @@ pipeline {
         // 6. Cleanup & Docker Prune
         stage('6. Cleanup & Docker Prune') {
             steps {
-                echo '## 🟢 STAGE 6: Cleanup & Docker Prune'
-                // Delete unused Docker images, clean workspaces
-                sh """
-                    echo 'Cleaning Docker artifacts...'
-                    # Delete unused Docker images, containers, volumes. '|| true' prevents job failure if nothing to prune.
-                    docker system prune -f --all --volumes || true 
-                    echo 'Cleaning temporary files...'
-                    rm -f ${LOG_FILE} ${RESULTS_FILE} || true
-                """
-                // Clean workspace
-                cleanWs(deleteDirs: true)
-                echo 'Cleanup complete.'
+                wrap([$class: 'AnsiColorBuildWrapper', colorMapName: 'xterm']) {
+                    echo '## 🟢 STAGE 6: Cleanup & Docker Prune'
+                    // Delete unused Docker images, clean workspaces
+                    sh """
+                        echo 'Cleaning Docker artifacts...'
+                        # Delete unused Docker images, containers, volumes. '|| true' prevents job failure if nothing to prune.
+                        docker system prune -f --all --volumes || true 
+                        echo 'Cleaning temporary files...'
+                        rm -f ${LOG_FILE} ${RESULTS_FILE} || true
+                    """
+                    // Clean workspace
+                    cleanWs(deleteDirs: true)
+                    echo 'Cleanup complete.'
+                }
             }
         }
     }
