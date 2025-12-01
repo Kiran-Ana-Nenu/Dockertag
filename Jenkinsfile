@@ -1,15 +1,13 @@
 /**
  * Jenkins Declarative Pipeline for Docker Image Tagging and Promotion.
  * Executes core logic using Fabric (fabfile.py) scripts.
- * * NOTE: The global 'agent none' setting means you must uncomment and define an
- * 'agent' block within the stages that execute actual work (e.g., Stage 1, 4).
- * If you want all stages to run on specific nodes, uncomment the NODE_LABEL variable
- * and change 'agent none' back to 'agent { label NODE_LABEL }'.
+ * * NOTE: The global 'agent none' setting requires you to uncomment and define 
+ * an 'agent' block within the stages that execute actual work (Stage 1, 4, 5, 6).
  */
 
 // --- Configuration Variables (Defined outside pipeline block for safety) ---
-// Node selection allows Jenkins to pick any available agent with these labels.
-// COMMENTED: Uncomment the line below and use it in the 'agent' section if needed.
+// If you want to use specific nodes, uncomment the line below and use the 
+// variable in an 'agent { label NODE_LABEL }' block in your stages.
 // def NODE_LABEL = 'docker-builderT || docker-builderM || docker-builderR' 
 def PARALLEL_LIMIT = 3            
 def DOCKER_HUB_CREDENTIAL_ID = 'docker_login' // Credential ID for Docker Hub
@@ -20,8 +18,7 @@ def PYTHON_SCRIPT_PATH = 'scripts/send_email.py'
 def FABRIC_SCRIPT_PATH = 'scripts/fabfile.py'
 
 pipeline {
-    // MODIFICATION: Setting global agent to 'none'. 
-    // If you uncommented NODE_LABEL above, replace 'none' with 'agent { label NODE_LABEL }'.
+    // Setting global agent to 'none'. You must define an agent in your stages!
     agent none 
 
     options {
@@ -58,7 +55,8 @@ pipeline {
         string(name: 'CUSTOM_TAG_SOURCE', defaultValue: '', description: 'Option B: Source image tag (e.g., 1.2.3)')
         string(name: 'CUSTOM_TAG_DESTINATION', defaultValue: '', description: 'Option B: Destination image tag (e.g., production-ready)')
 
-        // 6. Multi-select Images (Active Choices Parameter required in UI for checkbox)
+        // 6. Multi-select Images 
+        // NOTE: The visual checklist requires the Active Choices Parameter Plugin in the Jenkins UI.
         choice(name: 'IMAGES_TO_TAG', choices: [
             'all', 
             'Frontend', 
@@ -75,11 +73,11 @@ pipeline {
 
     // --- Environment Variables ---
     environment {
-        // Capture a safe timestamp (e.g., 20251201-183324)
+        // Dynamic Timestamp for unique log files (e.g., 20251201-190053)
         TIMESTAMP = new Date().format('yyyyMMdd-HHmmss')
         LOG_DIR_COMMAND = "mkdir -p ${LOG_DIR}"
         
-        // Dynamic Log File Path: docker_tagging-20251201-183324.log
+        // Dynamic Log File Path
         LOG_FILE_PATH = "${LOG_DIR}/docker_tagging-${env.TIMESTAMP}.log"
 
         // AWS configuration (Update these placeholders with actual values)
@@ -100,7 +98,7 @@ pipeline {
     stages {
         // 1. Checkout Code
         stage('1. Checkout Code') {
-            // Uncomment the agent block below if you need a specific node for SCM checkout/initial steps.
+            // Uncomment and set your desired agent label here
             // agent {
             //     label 'your-default-node'
             // }
@@ -183,7 +181,7 @@ pipeline {
 
         // 4. Image Tagging (Core Logic Execution)
         stage('4. Parallel Image Tagging') {
-            // Uncomment and use the specific node label required for Docker/Tagging operations here.
+            // Uncomment and set the required agent label for Docker operations here.
             // agent {
             //     label 'docker-builderT' 
             // }
