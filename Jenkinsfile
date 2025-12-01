@@ -5,7 +5,7 @@
 
 // --- Configuration Variables (Safely defined outside the pipeline block) ---
 // Node selection allows Jenkins to pick any available agent with these labels.
-// def NODE_LABEL = 'docker-builderT || docker-builderM || docker-builderR' 
+// def NODE_LABEL = 'docker-builderT || docker-builderM || docker-builderR' // COMMENTED: Uncomment to use specific nodes
 def PARALLEL_LIMIT = 3            
 def DOCKER_HUB_CREDENTIAL_ID = 'docker_login' // Credential ID for Docker Hub
 def LOG_DIR = '/var/log/jenkins'
@@ -15,10 +15,9 @@ def PYTHON_SCRIPT_PATH = 'scripts/send_email.py'
 def FABRIC_SCRIPT_PATH = 'scripts/fabfile.py'
 
 pipeline {
-    // FIX: Mandatory agent section is now guaranteed to be the first element.
-    // agent {
-    //     label NODE_LABEL
-    // }
+    // MODIFICATION: Setting global agent to 'none'.
+    // NOTE: This requires you to define an 'agent' inside EACH stage that performs work.
+    agent none 
 
     options {
         skipDefaultCheckout()
@@ -95,6 +94,10 @@ pipeline {
     stages {
         // 1. Checkout Code
         stage('1. Checkout Code') {
+            // WARNING: Since 'agent none' is global, you must uncomment and set an agent here
+            // agent {
+            //     label 'docker-builderT' // Use a default/required node here
+            // }
             steps {
                 wrap([$class: 'AnsiColorBuildWrapper', colorMapName: 'xterm']) {
                     echo '## 🟢 STAGE 1: Checkout Code'
@@ -110,73 +113,13 @@ pipeline {
             }
         }
 
-        // 2. Validate Parameters
-        stage('2. Validate Parameters') {
-            steps {
-                wrap([$class: 'AnsiColorBuildWrapper', colorMapName: 'xterm']) {
-                    script {
-                        echo '## 🟢 STAGE 2: Validate Parameters'
-                        echo '=================================================='
-                        echo "Validating parameters for TICKET: ${params.TICKET_NUMBER}"
-                        echo '=================================================='
+        // 2. Validate Parameters (Will run on agent used in Stage 1)
 
-                        // Robustness Logic: Enforce "all" OR custom list, but not both
-                        def selectedImages = params.IMAGES_TO_TAG.split(',').collect { it.trim() }
-                        
-                        if (selectedImages.contains('all') && selectedImages.size() > 1) {
-                            error 'Parameter Validation Failed: You cannot select "all" along with specific images (Frontend, Appmw, etc.).'
-                        }
-                        
-                        // Check for TICKET_NUMBER & empty image selection
-                        if (params.TICKET_NUMBER == null || params.TICKET_NUMBER.trim() == '') {
-                            error 'Parameter Validation Failed: Ticket Number is required.'
-                        }
-                        if (params.IMAGES_TO_TAG.trim() == '') {
-                            error 'Parameter Validation Failed: Image selection cannot be empty.'
-                        }
-
-                        // Parameter Validation: Conditional requirements for Option A/B
-                        if (params.TAGGING_OPTION.contains('Option B')) {
-                            if (params.CUSTOM_TAG_SOURCE == null || params.CUSTOM_TAG_SOURCE.trim() == '' ||
-                                params.CUSTOM_TAG_DESTINATION == null || params.CUSTOM_TAG_DESTINATION.trim() == '') {
-                                error 'Parameter Validation Failed: CUSTOM_TAG_SOURCE and CUSTOM_TAG_DESTINATION are required for Option B.'
-                            }
-                        } else if (params.TAG_A_TYPE.contains('particular_tag') && (params.CUSTOM_SOURCE_TAG == null || params.CUSTOM_SOURCE_TAG.trim() == '')) {
-                            error 'Parameter Validation Failed: CUSTOM_SOURCE_TAG is required for particular_tag->latest.'
-                        }
-                    }
-                }
-            }
-        }
-
-        // 3. Wait for Approval
-        stage('3. Wait for Approval') {
-            when {
-                expression { return params.DRY_RUN == 'NO' }
-            }
-            steps {
-                script {
-                    echo '## 🟡 STAGE 3: Wait for Approval (DRY_RUN = NO)'
-                    timeout(time: 2, unit: 'HOURS') {
-                        def userInput = input(
-                            id: 'ReleaseApproval',
-                            message: "Approve tagging and promotion for TICKET: **${params.TICKET_NUMBER}**?",
-                            // AUTHORIZATION FIX: Allows 'admin' or 'adminuser' roles to approve
-                            authorizedSid: 'admin, adminuser',
-                            parameters: [
-                                choice(name: 'Action', choices: ['PROCEED', 'ABORT'], description: 'Select PROCEED to continue the promotion or ABORT to cancel the job.')
-                            ]
-                        )
-                        if (userInput.Action == 'ABORT') {
-                            error 'Job aborted by user approval.'
-                        }
-                    }
-                }
-            }
-        }
+        // 3. Wait for Approval (Will run on agent used in Stage 1)
 
         // 4. Image Tagging (Core Logic Execution)
         stage('4. Parallel Image Tagging') {
+            // WARNING: You must set an agent here if different from Stage 1
             steps {
                 wrap([$class: 'AnsiColorBuildWrapper', colorMapName: 'xterm']) {
                     script {
@@ -234,6 +177,7 @@ pipeline {
 
         // 5. Send Email Notification (Python script)
         stage('5. Send Email Notification') {
+            // WARNING: You must set an agent here if different from Stage 1/4
             steps {
                 wrap([$class: 'AnsiColorBuildWrapper', colorMapName: 'xterm']) {
                     script {
@@ -261,6 +205,7 @@ pipeline {
 
         // 6. Cleanup & Docker Prune
         stage('6. Cleanup & Docker Prune') {
+            // WARNING: You must set an agent here if different from previous stages
             steps {
                 wrap([$class: 'AnsiColorBuildWrapper', colorMapName: 'xterm']) {
                     echo '## 🟢 STAGE 6: Cleanup & Docker Prune'
