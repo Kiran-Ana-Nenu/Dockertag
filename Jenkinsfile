@@ -10,6 +10,7 @@
 
 // --- Configuration Variables ---
 // def NODE_LABEL = 'docker-builder' // For Dynamic EC2 Slave Selection
+// def NODE_LABEL = 'docker-builderT || docker-builderM || docker-builderR' // Allows Jenkins to pick any one of these nodes.
 def PARALLEL_LIMIT = 3            // Parallelism Control (Throttle)
 def DOCKER_HUB_CREDENTIAL_ID = 'docker_login' // Credential ID from Jenkins
 def LOG_DIR = '/var/log/jenkins'
@@ -21,8 +22,8 @@ def FABRIC_SCRIPT_PATH = 'scripts/fabfile.py'
 
 pipeline {
     // Dynamic EC2 Slave Selection & Auto-launch based on label
-    // agent {
-    //     label NODE_LABEL
+    //  agent {
+    //     label NODE_LABEL // Will resolve to 'docker-builderT || docker-builderM || docker-builderR'
     // }
 
     options {
@@ -36,7 +37,7 @@ pipeline {
     }
 
     // Parameterized Jenkins Interface (Requires Active Choices Plugin)
-    parameters {
+  parameters {
         // 1. Docker Registry Selection
         choice(name: 'REGISTRY_TYPE', choices: ['docker-hub', 'aws-ecr'], description: 'Select the target Docker Registry.')
 
@@ -49,24 +50,25 @@ pipeline {
         // 4. Optional Email Recipients
         string(name: 'OPTIONAL_RECIPIENTS', defaultValue: '', description: 'Comma-separated list of optional recipients (e.g., user1@comp.com,user2@comp.com)')
 
-        // 5. Dependent Tagging Choice (Active Choices)
+        // 5. Image Tag Change Selection (Dependent Tagging Logic)
+        // Main Choice
         choice(name: 'TAGGING_OPTION', choices: [
-            'Option A: Single Tag Change',
+            'Option A: Standard Tag Change',
             'Option B: Custom Tags'
         ], description: 'Select the type of tag change.')
 
-        // Option A parameters:
+        // Option A parameters: For latest -> stable OR particular_tag -> latest
         choice(name: 'TAG_A_TYPE', choices: [
             'latest->stable',
             'particular_tag->latest'
         ], description: 'Option A: Select the standard tag change.')
         string(name: 'CUSTOM_SOURCE_TAG', defaultValue: '', description: 'Required for "particular_tag->latest" option.')
 
-        // Option B parameters:
+        // Option B parameters: Custom Source/Destination Tags
         string(name: 'CUSTOM_TAG_SOURCE', defaultValue: '', description: 'Option B: Source image tag (e.g., 1.2.3)')
         string(name: 'CUSTOM_TAG_DESTINATION', defaultValue: '', description: 'Option B: Destination image tag (e.g., production-ready)')
 
-        // 6. Multi-select Images (Active Choices Parameter - Checkbox)
+        // 6. Multi-select Images (Requires Active Choices Plugin to render as a Checkbox list)
         choice(name: 'IMAGES_TO_TAG', choices: ['all', 'appmw', 'othermw', 'cardui', 'middlemw', 'memcache'], description: 'Select images to process (Multi-select checkbox).')
     }
 
