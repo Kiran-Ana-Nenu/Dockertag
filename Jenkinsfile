@@ -1,12 +1,15 @@
 /**
  * Jenkins Declarative Pipeline for Docker Image Tagging and Promotion.
  * Executes core logic using Fabric (fabfile.py).
- * Features: Dynamic node allocation, parameterized execution, manual approval, 
- * parallel execution with throttling, error handling, dry-run mode, and detailed email notification.
+ * * NOTE ON REACTIVE PARAMETERS (TAGGING_OPTION):
+ * This file DEFINES all parameters. To make parameters disappear (e.g., Option B fields 
+ * when Option A is selected), you must manually configure the dependent parameters in the 
+ * Jenkins job UI using the Active Choices Reactive Parameter Plugin, and subsequently 
+ * remove their definitions from this Jenkinsfile.
  */
 
 // --- Configuration Variables ---
-//def NODE_LABEL = 'docker-builder' // For Dynamic EC2 Slave Selection
+def NODE_LABEL = 'docker-builder' // For Dynamic EC2 Slave Selection
 def PARALLEL_LIMIT = 3            // Parallelism Control (Throttle)
 def DOCKER_HUB_CREDENTIAL_ID = 'docker_login' // Credential ID from Jenkins
 def LOG_DIR = '/var/log/jenkins'
@@ -17,10 +20,10 @@ def PYTHON_SCRIPT_PATH = 'scripts/send_email.py'
 def FABRIC_SCRIPT_PATH = 'scripts/fabfile.py'
 
 pipeline {
-    // // Dynamic EC2 Slave Selection & Auto-launch based on label
-    // agent {
-    //     label NODE_LABEL
-    // }
+    // Dynamic EC2 Slave Selection & Auto-launch based on label
+    agent {
+        label NODE_LABEL
+    }
 
     options {
         // Clean pipeline - ensures a fresh environment
@@ -29,8 +32,7 @@ pipeline {
         // FIX: The 'unit' must be in ALL CAPS (HOURS)
         timeout(time: 3, unit: 'HOURS') 
         
-        // FIX: ansiColor/wrap is removed from the global options block 
-        // as it is too restrictive. It is applied inside the stage steps instead.
+        // ansiColor/wrap is applied inside the stage steps for better compatibility.
     }
 
     // Parameterized Jenkins Interface (Requires Active Choices Plugin)
@@ -84,7 +86,7 @@ pipeline {
         // 1. Checkout Code
         stage('1. Checkout Code') {
             steps {
-                // Apply AnsiColor wrapper here (Console UX Improvements)
+                // Apply AnsiColor wrapper (FIXED SYNTAX)
                 wrap([$class: 'AnsiColorBuildWrapper', colorMapName: 'xterm']) {
                     echo '## 🟢 STAGE 1: Checkout Code'
                     // Checkout SCM (ensures scripts/fabfile.py is available)
@@ -105,6 +107,14 @@ pipeline {
                         echo "Validating parameters for TICKET: ${params.TICKET_NUMBER}"
                         echo '=================================================='
 
+                        // --- NEW LOGIC: Enforce "all" OR custom list, but not both ---
+                        def selectedImages = params.IMAGES_TO_TAG.split(',').collect { it.trim() }
+                        
+                        if (selectedImages.contains('all') && selectedImages.size() > 1) {
+                            error 'Parameter Validation Failed: You cannot select "all" along with specific images (appmw, othermw, etc.).'
+                        }
+                        // -----------------------------------------------------------------
+
                         // Check for TICKET_NUMBER
                         if (params.TICKET_NUMBER == null || params.TICKET_NUMBER.trim() == '') {
                             error 'Parameter Validation Failed: Ticket Number is required.'
@@ -115,7 +125,7 @@ pipeline {
                             error 'Parameter Validation Failed: Image selection cannot be empty.'
                         }
 
-                        // Parameter Validation: Conditional requirements
+                        // Parameter Validation: Conditional requirements for Option A/B
                         if (params.TAGGING_OPTION.contains('Option B')) {
                             if (params.CUSTOM_TAG_SOURCE == null || params.CUSTOM_TAG_SOURCE.trim() == '' ||
                                 params.CUSTOM_TAG_DESTINATION == null || params.CUSTOM_TAG_DESTINATION.trim() == '') {
@@ -167,12 +177,10 @@ pipeline {
                         // --- Docker Registry Handling (Login) ---
                         sh 'echo "Logging in to Docker Registry..."'
                         if (params.REGISTRY_TYPE == 'docker-hub') {
-                            // Use Docker Hub Credentials
                             withCredentials([usernamePassword(credentialsId: DOCKER_HUB_CREDENTIAL_ID, passwordVariable: 'DOCKER_PASSWORD', usernameVariable: 'DOCKER_USERNAME')]) {
                                 sh "docker login -u ${DOCKER_USERNAME} -p ${DOCKER_PASSWORD}"
                             }
                         } else if (params.REGISTRY_TYPE == 'aws-ecr') {
-                            // Use IAM Role (Assumes AWS CLI configured on the slave node)
                             // NOTE: Replace placeholders (<YOUR_REGION>, <YOUR_ACCOUNT_ID>)
                             sh 'aws ecr get-login-password --region <YOUR_REGION> | docker login --username AWS --password-stdin <YOUR_ACCOUNT_ID>.dkr.ecr.<YOUR_REGION>.amazonaws.com'
                         }
@@ -189,7 +197,7 @@ pipeline {
                             taggingArgs = "--tag-type custom_to_custom --source-tag ${params.CUSTOM_TAG_SOURCE} --destination-tag ${params.CUSTOM_TAG_DESTINATION}"
                         }
 
-                        // --- Execute Fabric Command ---
+                        // --- Execute Fabric Command (Parallel w/ Retry Logic Handled in Python) ---
                         sh """
                             echo 'Executing Fabric script: ${FABRIC_SCRIPT_PATH}'
                             python3 ${FABRIC_SCRIPT_PATH} tag_images: \
@@ -214,7 +222,6 @@ pipeline {
                 wrap([$class: 'AnsiColorBuildWrapper', colorMapName: 'xterm']) {
                     script {
                         echo '## 🟢 STAGE 5: Send Email Notification'
-                        // Combine required recipient (committer email) with optional ones
                         def recipients = "${env.GIT_COMMITTER_EMAIL},${params.OPTIONAL_RECIPIENTS}".split(',').collect { it.trim() }.findAll { it.length() > 0 }.join(',')
                         
                         // Execute the Python script for modern, styled email
@@ -244,7 +251,6 @@ pipeline {
                     // Delete unused Docker images, clean workspaces
                     sh """
                         echo 'Cleaning Docker artifacts...'
-                        # Delete unused Docker images, containers, volumes. '|| true' prevents job failure if nothing to prune.
                         docker system prune -f --all --volumes || true 
                         echo 'Cleaning temporary files...'
                         rm -f ${LOG_FILE} ${RESULTS_FILE} || true
