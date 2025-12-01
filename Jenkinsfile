@@ -4,7 +4,7 @@
  */
 
 // --- Configuration Variables ---
-def NODE_LABEL = 'docker-builderT || docker-builderM || docker-builderR' 
+// def NODE_LABEL = 'docker-builderT || docker-builderM || docker-builderR' 
 def PARALLEL_LIMIT = 3            
 def DOCKER_HUB_CREDENTIAL_ID = 'docker_login' 
 def LOG_DIR = '/var/log/jenkins'
@@ -15,9 +15,9 @@ def PYTHON_SCRIPT_PATH = 'scripts/send_email.py'
 def FABRIC_SCRIPT_PATH = 'scripts/fabfile.py'
 
 pipeline {
-    agent {
-        label NODE_LABEL
-    }
+    // agent {
+    //     label NODE_LABEL
+    // }
 
     options {
         skipDefaultCheckout()
