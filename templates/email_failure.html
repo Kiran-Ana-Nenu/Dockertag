@@ -1,0 +1,25 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <style>
+    body { font-family: Arial, sans-serif; }
+    .header { background:#b20b0b; color:white; padding:20px }
+    .content { padding:20px }
+    .fail { color: #b20b0b; font-weight:bold }
+  </style>
+</head>
+<body>
+  <div class="header"><h2>Promotion Failed</h2></div>
+  <div class="content">
+    <p>Ticket: <a href="https://your-tracker/ticket/{{TICKET}}">{{TICKET}}</a></p>
+    <p>Jenkins Job: <a href="{{JOB_URL}}">Open Build</a></p>
+    <p>Dry Run: {{DRY_RUN}}</p>
+    <h3>Failed Items</h3>
+    <table>
+      <tr><th>Image</th><th>Error</th></tr>
+    </table>
+  </div>
+  <div class="footer">Regards,<br/>DevOps Team</div>
+</body>
+</html>
