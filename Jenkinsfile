@@ -1,11 +1,16 @@
 /**
  * Jenkins Declarative Pipeline for Docker Image Tagging and Promotion.
- * Executes core logic using Fabric (fabfile.py).
+ * Executes core logic using Fabric (fabfile.py) scripts.
+ * * NOTE: The global 'agent none' setting means you must uncomment and define an
+ * 'agent' block within the stages that execute actual work (e.g., Stage 1, 4).
+ * If you want all stages to run on specific nodes, uncomment the NODE_LABEL variable
+ * and change 'agent none' back to 'agent { label NODE_LABEL }'.
  */
 
-// --- Configuration Variables (Safely defined outside the pipeline block) ---
+// --- Configuration Variables (Defined outside pipeline block for safety) ---
 // Node selection allows Jenkins to pick any available agent with these labels.
-// def NODE_LABEL = 'docker-builderT || docker-builderM || docker-builderR' // COMMENTED: Uncomment to use specific nodes
+// COMMENTED: Uncomment the line below and use it in the 'agent' section if needed.
+// def NODE_LABEL = 'docker-builderT || docker-builderM || docker-builderR' 
 def PARALLEL_LIMIT = 3            
 def DOCKER_HUB_CREDENTIAL_ID = 'docker_login' // Credential ID for Docker Hub
 def LOG_DIR = '/var/log/jenkins'
@@ -15,8 +20,8 @@ def PYTHON_SCRIPT_PATH = 'scripts/send_email.py'
 def FABRIC_SCRIPT_PATH = 'scripts/fabfile.py'
 
 pipeline {
-    // MODIFICATION: Setting global agent to 'none'.
-    // NOTE: This requires you to define an 'agent' inside EACH stage that performs work.
+    // MODIFICATION: Setting global agent to 'none'. 
+    // If you uncommented NODE_LABEL above, replace 'none' with 'agent { label NODE_LABEL }'.
     agent none 
 
     options {
@@ -24,7 +29,7 @@ pipeline {
         timeout(time: 3, unit: 'HOURS') 
     }
 
-    // Parameterized Jenkins Interface
+    // --- Parameterized Jenkins Interface ---
     parameters {
         // 1. Docker Registry Selection
         choice(name: 'REGISTRY_TYPE', choices: ['docker-hub', 'aws-ecr'], description: 'Select the target Docker Registry.')
@@ -53,7 +58,7 @@ pipeline {
         string(name: 'CUSTOM_TAG_SOURCE', defaultValue: '', description: 'Option B: Source image tag (e.g., 1.2.3)')
         string(name: 'CUSTOM_TAG_DESTINATION', defaultValue: '', description: 'Option B: Destination image tag (e.g., production-ready)')
 
-        // 6. Multi-select Images (Updated List)
+        // 6. Multi-select Images (Active Choices Parameter required in UI for checkbox)
         choice(name: 'IMAGES_TO_TAG', choices: [
             'all', 
             'Frontend', 
@@ -68,6 +73,7 @@ pipeline {
         ], description: 'Select images to process (Multi-select checkbox).')
     }
 
+    // --- Environment Variables ---
     environment {
         // Capture a safe timestamp (e.g., 20251201-183324)
         TIMESTAMP = new Date().format('yyyyMMdd-HHmmss')
@@ -80,7 +86,7 @@ pipeline {
         AWS_REGION = 'us-east-1' 
         AWS_ACCOUNT_ID = '123456789012' 
         
-        // Links (RELEASE_NOTES_LINK correctly appends TICKET_NUMBER)
+        // Links 
         RELEASE_NOTES_LINK = "${RELEASE_NOTES_BASE_URL}${params.TICKET_NUMBER}"
         BUILD_INFO = "Jenkins Job: ${env.JOB_NAME} #${env.BUILD_NUMBER}"
         
@@ -94,9 +100,9 @@ pipeline {
     stages {
         // 1. Checkout Code
         stage('1. Checkout Code') {
-            // WARNING: Since 'agent none' is global, you must uncomment and set an agent here
+            // Uncomment the agent block below if you need a specific node for SCM checkout/initial steps.
             // agent {
-            //     label 'docker-builderT' // Use a default/required node here
+            //     label 'your-default-node'
             // }
             steps {
                 wrap([$class: 'AnsiColorBuildWrapper', colorMapName: 'xterm']) {
@@ -113,13 +119,74 @@ pipeline {
             }
         }
 
-        // 2. Validate Parameters (Will run on agent used in Stage 1)
+        // 2. Validate Parameters
+        stage('2. Validate Parameters') {
+            steps {
+                wrap([$class: 'AnsiColorBuildWrapper', colorMapName: 'xterm']) {
+                    script {
+                        echo '## 🟢 STAGE 2: Validate Parameters'
 
-        // 3. Wait for Approval (Will run on agent used in Stage 1)
+                        // Robustness Logic: Enforce "all" OR custom list, but not both
+                        def selectedImages = params.IMAGES_TO_TAG.split(',').collect { it.trim() }
+                        
+                        if (selectedImages.contains('all') && selectedImages.size() > 1) {
+                            error 'Parameter Validation Failed: You cannot select "all" along with specific images.'
+                        }
+                        
+                        // Check for TICKET_NUMBER & empty image selection
+                        if (params.TICKET_NUMBER == null || params.TICKET_NUMBER.trim() == '') {
+                            error 'Parameter Validation Failed: Ticket Number is required.'
+                        }
+                        if (params.IMAGES_TO_TAG.trim() == '') {
+                            error 'Parameter Validation Failed: Image selection cannot be empty.'
+                        }
+
+                        // Parameter Validation: Conditional requirements for Option A/B
+                        if (params.TAGGING_OPTION.contains('Option B')) {
+                            if (params.CUSTOM_TAG_SOURCE == null || params.CUSTOM_TAG_SOURCE.trim() == '' ||
+                                params.CUSTOM_TAG_DESTINATION == null || params.CUSTOM_TAG_DESTINATION.trim() == '') {
+                                error 'Parameter Validation Failed: CUSTOM_TAG_SOURCE and CUSTOM_TAG_DESTINATION are required for Option B.'
+                            }
+                        } else if (params.TAG_A_TYPE.contains('particular_tag') && (params.CUSTOM_SOURCE_TAG == null || params.CUSTOM_SOURCE_TAG.trim() == '')) {
+                            error 'Parameter Validation Failed: CUSTOM_SOURCE_TAG is required for particular_tag->latest.'
+                        }
+                    }
+                }
+            }
+        }
+
+        // 3. Wait for Approval
+        stage('3. Wait for Approval') {
+            when {
+                expression { return params.DRY_RUN == 'NO' }
+            }
+            steps {
+                script {
+                    echo '## 🟡 STAGE 3: Wait for Approval (DRY_RUN = NO)'
+                    timeout(time: 2, unit: 'HOURS') {
+                        def userInput = input(
+                            id: 'ReleaseApproval',
+                            message: "Approve tagging and promotion for TICKET: **${params.TICKET_NUMBER}**?",
+                            // AUTHORIZATION: Only users with 'admin' or 'adminuser' roles can approve
+                            authorizedSid: 'admin, adminuser',
+                            parameters: [
+                                choice(name: 'Action', choices: ['PROCEED', 'ABORT'], description: 'Select PROCEED to continue the promotion or ABORT to cancel the job.')
+                            ]
+                        )
+                        if (userInput.Action == 'ABORT') {
+                            error 'Job aborted by user approval.'
+                        }
+                    }
+                }
+            }
+        }
 
         // 4. Image Tagging (Core Logic Execution)
         stage('4. Parallel Image Tagging') {
-            // WARNING: You must set an agent here if different from Stage 1
+            // Uncomment and use the specific node label required for Docker/Tagging operations here.
+            // agent {
+            //     label 'docker-builderT' 
+            // }
             steps {
                 wrap([$class: 'AnsiColorBuildWrapper', colorMapName: 'xterm']) {
                     script {
@@ -150,7 +217,7 @@ pipeline {
                             taggingArgs = "--tag-type custom_to_custom --source-tag ${params.CUSTOM_TAG_SOURCE} --destination-tag ${params.CUSTOM_TAG_DESTINATION}"
                         }
 
-                        // Execute Fabric Command (Using LOG_FILE_PATH)
+                        // Execute Fabric Command (Using Dynamic LOG_FILE_PATH)
                         sh """
                             echo 'Executing Fabric script: ${FABRIC_SCRIPT_PATH}'
                             python3 ${FABRIC_SCRIPT_PATH} tag_images: \
@@ -162,7 +229,7 @@ pipeline {
                                 ${taggingArgs}
                         """
 
-                        // Print Tagging Results to Console
+                        // Print Tagging Results to Console for quick viewing
                         echo '=================================================='
                         echo "Image Tagging Results (${RESULTS_FILE}):"
                         echo '=================================================='
@@ -177,14 +244,13 @@ pipeline {
 
         // 5. Send Email Notification (Python script)
         stage('5. Send Email Notification') {
-            // WARNING: You must set an agent here if different from Stage 1/4
             steps {
                 wrap([$class: 'AnsiColorBuildWrapper', colorMapName: 'xterm']) {
                     script {
                         echo '## 🟢 STAGE 5: Send Email Notification'
                         def recipients = "${env.GIT_COMMITTER_EMAIL},${params.OPTIONAL_RECIPIENTS}".split(',').collect { it.trim() }.findAll { it.length() > 0 }.join(',')
                         
-                        // Execute the Python script (Using LOG_FILE_PATH)
+                        // Execute the Python script (Using Dynamic LOG_FILE_PATH)
                         sh """
                             echo 'Running Python email script: ${PYTHON_SCRIPT_PATH}'
                             python3 ${PYTHON_SCRIPT_PATH} \\
@@ -205,7 +271,6 @@ pipeline {
 
         // 6. Cleanup & Docker Prune
         stage('6. Cleanup & Docker Prune') {
-            // WARNING: You must set an agent here if different from previous stages
             steps {
                 wrap([$class: 'AnsiColorBuildWrapper', colorMapName: 'xterm']) {
                     echo '## 🟢 STAGE 6: Cleanup & Docker Prune'
@@ -215,7 +280,7 @@ pipeline {
                         echo 'Cleaning Docker artifacts...'
                         docker system prune -f --all --volumes || true 
                         echo 'Cleaning temporary files...'
-                        // Using LOG_FILE_PATH for cleanup
+                        // Using Dynamic LOG_FILE_PATH for cleanup
                         rm -f ${env.LOG_FILE_PATH} ${RESULTS_FILE} || true
                     """
                     // Final workspace cleanup
@@ -226,14 +291,14 @@ pipeline {
         }
     }
 
-    // Post-build actions for FAILURE email
+    // --- Post-Build Actions ---
     post {
         failure {
             script {
                 echo '## 🔴 Post-Build: Failure Notification'
                 def recipients = "${env.GIT_COMMITTER_EMAIL},${params.OPTIONAL_RECIPIENTS}".split(',').collect { it.trim() }.findAll { it.length() > 0 }.join(',')
                 
-                // Execute failure email template (Using LOG_FILE_PATH)
+                // Execute failure email template (Using Dynamic LOG_FILE_PATH)
                 sh """
                     echo 'Running Python failure email script: ${PYTHON_SCRIPT_PATH}'
                     python3 ${PYTHON_SCRIPT_PATH} \\
