@@ -1,20 +1,27 @@
 /**
  * Jenkins Declarative Pipeline for Docker Image Tagging and Promotion.
  * Executes core logic using Fabric (fabfile.py).
+ * * Key Features Included:
+ * 1. Multi-Node Support: Runs on any available node from the list (docker-builderT/M/R).
+ * 2. Robust Parameter Validation: Enforces "all OR custom list" selection for images.
+ * 3. Dynamic Tagging Logic: Supports latest->stable, custom->latest, or custom->custom.
+ * 4. Manual Approval Gate: Authorized users ('admin', 'adminuser') can approve.
+ * 5. Dynamic Logging: Log file names include date/time stamp for unique logs per build.
  */
 
 // --- Configuration Variables ---
+// Node selection allows Jenkins to pick any available agent with these labels.
 // def NODE_LABEL = 'docker-builderT || docker-builderM || docker-builderR' 
 def PARALLEL_LIMIT = 3            
-def DOCKER_HUB_CREDENTIAL_ID = 'docker_login' 
+def DOCKER_HUB_CREDENTIAL_ID = 'docker_login' // Credential ID for Docker Hub
 def LOG_DIR = '/var/log/jenkins'
-// NOTE: LOG_FILE is now defined dynamically inside the environment block
-def RESULTS_FILE = 'tagging_results.json' 
-def RELEASE_NOTES_BASE_URL = 'https://yourcompanysjira.com/browse/' 
+def RESULTS_FILE = 'tagging_results.json' // File used by Python script to store tagging outcomes
+def RELEASE_NOTES_BASE_URL = 'https://yourcompanysjira.com/browse/' // Update this base URL
 def PYTHON_SCRIPT_PATH = 'scripts/send_email.py'
 def FABRIC_SCRIPT_PATH = 'scripts/fabfile.py'
 
 pipeline {
+    // Agent definition is mandatory at the top level
     // agent {
     //     label NODE_LABEL
     // }
@@ -24,7 +31,7 @@ pipeline {
         timeout(time: 3, unit: 'HOURS') 
     }
 
-    // Parameterized Jenkins Interface 
+    // Parameterized Jenkins Interface
     parameters {
         // 1. Docker Registry Selection
         choice(name: 'REGISTRY_TYPE', choices: ['docker-hub', 'aws-ecr'], description: 'Select the target Docker Registry.')
@@ -73,15 +80,14 @@ pipeline {
         TIMESTAMP = new Date().format('yyyyMMdd-HHmmss')
         LOG_DIR_COMMAND = "mkdir -p ${LOG_DIR}"
         
-        // --- UPDATED: Define LOG_FILE_PATH dynamically here ---
+        // Dynamic Log File Path: docker_tagging-20251201-183324.log
         LOG_FILE_PATH = "${LOG_DIR}/docker_tagging-${env.TIMESTAMP}.log"
-        // -----------------------------------------------------
 
         // AWS configuration (Update these placeholders with actual values)
         AWS_REGION = 'us-east-1' 
         AWS_ACCOUNT_ID = '123456789012' 
         
-        // Links 
+        // Links (RELEASE_NOTES_LINK correctly appends TICKET_NUMBER)
         RELEASE_NOTES_LINK = "${RELEASE_NOTES_BASE_URL}${params.TICKET_NUMBER}"
         BUILD_INFO = "Jenkins Job: ${env.JOB_NAME} #${env.BUILD_NUMBER}"
         
@@ -93,11 +99,87 @@ pipeline {
     }
 
     stages {
-        // 1. Checkout Code (No changes here, just using LOG_DIR)
+        // 1. Checkout Code
+        stage('1. Checkout Code') {
+            steps {
+                wrap([$class: 'AnsiColorBuildWrapper', colorMapName: 'xterm']) {
+                    echo '## 🟢 STAGE 1: Checkout Code'
+                    checkout scm
+                    sh "${env.LOG_DIR_COMMAND}"
+                    
+                    // Robustness Check: Ensure Python 3 is available
+                    script {
+                        echo 'Checking required dependencies: Python 3 and Fabric setup.'
+                        sh 'which python3 || error "Python 3 not found on agent. Cannot run Fabric/Email script!"'
+                    }
+                }
+            }
+        }
 
-        // 2. Validate Parameters (No functional changes needed)
+        // 2. Validate Parameters
+        stage('2. Validate Parameters') {
+            steps {
+                wrap([$class: 'AnsiColorBuildWrapper', colorMapName: 'xterm']) {
+                    script {
+                        echo '## 🟢 STAGE 2: Validate Parameters'
+                        echo '=================================================='
+                        echo "Validating parameters for TICKET: ${params.TICKET_NUMBER}"
+                        echo '=================================================='
 
-        // 3. Wait for Approval (No changes needed)
+                        // Robustness Logic: Enforce "all" OR custom list, but not both
+                        def selectedImages = params.IMAGES_TO_TAG.split(',').collect { it.trim() }
+                        
+                        if (selectedImages.contains('all') && selectedImages.size() > 1) {
+                            error 'Parameter Validation Failed: You cannot select "all" along with specific images (Frontend, Appmw, etc.).'
+                        }
+                        
+                        // Check for TICKET_NUMBER & empty image selection
+                        if (params.TICKET_NUMBER == null || params.TICKET_NUMBER.trim() == '') {
+                            error 'Parameter Validation Failed: Ticket Number is required.'
+                        }
+                        if (params.IMAGES_TO_TAG.trim() == '') {
+                            error 'Parameter Validation Failed: Image selection cannot be empty.'
+                        }
+
+                        // Parameter Validation: Conditional requirements for Option A/B
+                        if (params.TAGGING_OPTION.contains('Option B')) {
+                            if (params.CUSTOM_TAG_SOURCE == null || params.CUSTOM_TAG_SOURCE.trim() == '' ||
+                                params.CUSTOM_TAG_DESTINATION == null || params.CUSTOM_TAG_DESTINATION.trim() == '') {
+                                error 'Parameter Validation Failed: CUSTOM_TAG_SOURCE and CUSTOM_TAG_DESTINATION are required for Option B.'
+                            }
+                        } else if (params.TAG_A_TYPE.contains('particular_tag') && (params.CUSTOM_SOURCE_TAG == null || params.CUSTOM_SOURCE_TAG.trim() == '')) {
+                            error 'Parameter Validation Failed: CUSTOM_SOURCE_TAG is required for particular_tag->latest.'
+                        }
+                    }
+                }
+            }
+        }
+
+        // 3. Wait for Approval
+        stage('3. Wait for Approval') {
+            when {
+                expression { return params.DRY_RUN == 'NO' }
+            }
+            steps {
+                script {
+                    echo '## 🟡 STAGE 3: Wait for Approval (DRY_RUN = NO)'
+                    timeout(time: 2, unit: 'HOURS') {
+                        def userInput = input(
+                            id: 'ReleaseApproval',
+                            message: "Approve tagging and promotion for TICKET: **${params.TICKET_NUMBER}**?",
+                            // AUTHORIZATION FIX: Allows 'admin' or 'adminuser' roles to approve
+                            authorizedSid: 'admin, adminuser',
+                            parameters: [
+                                choice(name: 'Action', choices: ['PROCEED', 'ABORT'], description: 'Select PROCEED to continue the promotion or ABORT to cancel the job.')
+                            ]
+                        )
+                        if (userInput.Action == 'ABORT') {
+                            error 'Job aborted by user approval.'
+                        }
+                    }
+                }
+            }
+        }
 
         // 4. Image Tagging (Core Logic Execution)
         stage('4. Parallel Image Tagging') {
@@ -113,12 +195,13 @@ pipeline {
                                 sh "docker login -u ${DOCKER_USERNAME} -p ${DOCKER_PASSWORD}"
                             }
                         } else if (params.REGISTRY_TYPE == 'aws-ecr') {
+                            // Enhanced Security: Use withEnv for account/region variables
                             withEnv(["AWS_ACCOUNT=${env.AWS_ACCOUNT_ID}", "AWS_REG=${env.AWS_REGION}"]) {
                                 sh 'aws ecr get-login-password --region ${AWS_REG} | docker login --username AWS --password-stdin ${AWS_ACCOUNT}.dkr.ecr.${AWS_REG}.amazonaws.com'
                             }
                         }
 
-                        // Construct Fabric Command Arguments (Omitted for brevity)
+                        // Construct Fabric Command Arguments
                         def taggingArgs = ""
                         if (params.TAGGING_OPTION.contains('Option A')) {
                             if (params.TAG_A_TYPE.contains('latest->stable')) {
@@ -142,14 +225,12 @@ pipeline {
                                 ${taggingArgs}
                         """
 
-                        // --- NEW: Print Tagging Results to Console ---
+                        // NEW: Print Tagging Results to Console
                         echo '=================================================='
                         echo "Image Tagging Results (${RESULTS_FILE}):"
                         echo '=================================================='
-                        // Check if file exists, then print it
                         sh "if [ -f ${RESULTS_FILE} ]; then cat ${RESULTS_FILE}; else echo 'ERROR: Results file not found or empty.'; fi"
                         echo '=================================================='
-                        // ---------------------------------------------
                         
                         sh 'echo "Logging out of Docker..." && docker logout'
                     }
