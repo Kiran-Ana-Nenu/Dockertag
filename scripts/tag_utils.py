@@ -1,44 +1,26 @@
-# tag_utils.py - small helpers for retrying docker commands
+#!/usr/bin/env python3
 import subprocess
 import time
 
+def run_command(cmd, retries=3, delay=5):
+    attempt = 0
+    while attempt < retries:
+        try:
+            subprocess.check_call(cmd, shell=True)
+            return True
+        except subprocess.CalledProcessError as e:
+            attempt += 1
+            print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Command failed: {cmd}, attempt {attempt}")
+            if attempt >= retries:
+                raise e
+            time.sleep(delay)
+    return False
 
-RETRY = 3
-SLEEP = 5
+def pull_image(image):
+    return run_command(f"docker pull {image}")
 
+def tag_image(source, target):
+    return run_command(f"docker tag {source} {target}")
 
-
-
-def run_cmd(cmd):
-print('CMD:', cmd)
-return subprocess.call(cmd, shell=True)
-
-
-
-
-def pull_with_retry(ref):
-for i in range(RETRY):
-rc = run_cmd(f"docker pull {ref}")
-if rc == 0:
-return True
-time.sleep(SLEEP)
-return False
-
-
-
-
-def tag_image(src, dst):
-rc = run_cmd(f"docker tag {src} {dst}")
-if rc != 0:
-raise RuntimeError('docker tag failed')
-
-
-
-
-def push_with_retry(ref):
-for i in range(RETRY):
-rc = run_cmd(f"docker push {ref}")
-if rc == 0:
-return True
-time.sleep(SLEEP)
-raise RuntimeError('docker push failed')
+def push_image(image):
+    return run_command(f"docker push {image}")

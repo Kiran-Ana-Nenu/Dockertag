@@ -1,58 +1,51 @@
 #!/usr/bin/env python3
-# send_email.py - compose HTML email (success/failure) and send via local sendmail or SMTP
-
-
-import argparse
-import smtplib
-from email.message import EmailMessage
-from pathlib import Path
-
+import smtplib, argparse, os
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.mime.image import MIMEImage
+from email.mime.application import MIMEApplication
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--ticket', default='')
-parser.add_argument('--recipients', default='')
-parser.add_argument('--log', default='/var/log/jenkins/docker_tagging.log')
-parser.add_argument('--status', choices=['SUCCESS','FAILURE'], default='SUCCESS')
-parser.add_argument('--dry-run', choices=['YES','NO'], default='NO')
+parser.add_argument('--ticket', required=True)
+parser.add_argument('--recipients', required=True)
+parser.add_argument('--log', required=True)
+parser.add_argument('--status', choices=['SUCCESS','FAILURE'], required=True)
 args = parser.parse_args()
 
+def send_email():
+    with open(args.log, 'r') as f:
+        log_content = f.read()
 
-TPL_DIR = Path(__file__).resolve().parent.parent / 'templates'
+    msg = MIMEMultipart('mixed')
+    msg['Subject'] = f"Release Notification - {args.ticket} - {args.status}"
+    msg['From'] = "devops@company.com"
+    msg['To'] = args.recipients
 
+    # Choose template
+    template_file = f"jenkins/templates/email_{args.status.lower()}.html"
+    with open(template_file, 'r') as f:
+        html = f.read()
 
-def load_template(status):
-fname = 'email_success.html' if status == 'SUCCESS' else 'email_failure.html'
-return (TPL_DIR / fname).read_text()
+    msg_html = MIMEText(html, 'html')
+    msg.attach(msg_html)
 
+    # Attach logo
+    with open('jenkins/assets/company_logo.png', 'rb') as f:
+        logo = MIMEImage(f.read())
+        logo.add_header('Content-ID','<company_logo>')
+        logo.add_header('Content-Disposition','inline', filename='company_logo.png')
+        msg.attach(logo)
 
+    # Attach log
+    with open(args.log, 'rb') as f:
+        log_part = MIMEApplication(f.read(), Name='docker_tagging.log')
+        log_part['Content-Disposition'] = 'attachment; filename="docker_tagging.log"'
+        msg.attach(log_part)
 
+    s = smtplib.SMTP('localhost')
+    s.send_message(msg)
+    s.quit()
+    print(f"Email sent to {args.recipients}")
 
-def send_email(body_html, subject, attachments, recipients):
-msg = EmailMessage()
-msg['Subject'] = subject
-msg['From'] = 'ci@example.com'
-msg['To'] = recipients
-msg.set_content('This is an HTML email. Please view in an HTML capable client.')
-msg.add_alternative(body_html, subtype='html')
-
-
-for att in attachments:
-with open(att, 'rb') as f:
-data = f.read()
-msg.add_attachment(data, maintype='text', subtype='plain', filename=Path(att).name)
-
-
-# Simple send via localhost
-with smtplib.SMTP('localhost') as s:
-s.send_message(msg)
-
-
-
-
-if __name__ == '__main__':
-recipients = args.recipients.split(',') if args.recipients else ['team@example.com']
-html = load_template(args.status)
-# simple subject with ticket link
-subject = f"[CI] Docker Tagging {args.status} - {args.ticket}"
-attachments = [args.log] if Path(args.log).exists() else []
-send_email(html, subject, attachments, ','.join(recipients))
+if __name__ == "__main__":
+    send_email()
