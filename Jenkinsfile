@@ -1,15 +1,9 @@
 /**
  * Jenkins Declarative Pipeline for Docker Image Tagging and Promotion.
  * Executes core logic using Fabric (fabfile.py).
- * * Key Features Included:
- * 1. Multi-Node Support: Runs on any available node from the list (docker-builderT/M/R).
- * 2. Robust Parameter Validation: Enforces "all OR custom list" selection for images.
- * 3. Dynamic Tagging Logic: Supports latest->stable, custom->latest, or custom->custom.
- * 4. Manual Approval Gate: Authorized users ('admin', 'adminuser') can approve.
- * 5. Dynamic Logging: Log file names include date/time stamp for unique logs per build.
  */
 
-// --- Configuration Variables ---
+// --- Configuration Variables (Safely defined outside the pipeline block) ---
 // Node selection allows Jenkins to pick any available agent with these labels.
 // def NODE_LABEL = 'docker-builderT || docker-builderM || docker-builderR' 
 def PARALLEL_LIMIT = 3            
@@ -21,7 +15,7 @@ def PYTHON_SCRIPT_PATH = 'scripts/send_email.py'
 def FABRIC_SCRIPT_PATH = 'scripts/fabfile.py'
 
 pipeline {
-    // Agent definition is mandatory at the top level
+    // FIX: Mandatory agent section is now guaranteed to be the first element.
     // agent {
     //     label NODE_LABEL
     // }
@@ -225,7 +219,7 @@ pipeline {
                                 ${taggingArgs}
                         """
 
-                        // NEW: Print Tagging Results to Console
+                        // Print Tagging Results to Console
                         echo '=================================================='
                         echo "Image Tagging Results (${RESULTS_FILE}):"
                         echo '=================================================='
