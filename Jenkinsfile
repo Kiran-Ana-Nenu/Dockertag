@@ -9,7 +9,7 @@
  */
 
 // --- Configuration Variables ---
-def NODE_LABEL = 'docker-builder' // For Dynamic EC2 Slave Selection
+// def NODE_LABEL = 'docker-builder' // For Dynamic EC2 Slave Selection
 def PARALLEL_LIMIT = 3            // Parallelism Control (Throttle)
 def DOCKER_HUB_CREDENTIAL_ID = 'docker_login' // Credential ID from Jenkins
 def LOG_DIR = '/var/log/jenkins'
@@ -21,9 +21,9 @@ def FABRIC_SCRIPT_PATH = 'scripts/fabfile.py'
 
 pipeline {
     // Dynamic EC2 Slave Selection & Auto-launch based on label
-    agent {
-        label NODE_LABEL
-    }
+    // agent {
+    //     label NODE_LABEL
+    // }
 
     options {
         // Clean pipeline - ensures a fresh environment
